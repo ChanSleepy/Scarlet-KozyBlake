@@ -2689,7 +2689,7 @@ public class ScarletDiscordJDA implements ScarletDiscord
                 : (mention
                     ? ("<@"+actorMeta.userSnowflake+">")
                     : (entryMeta.hasAuxActor() ? entryMeta.auxActorDisplayName : entryMeta.entry.getActorDisplayName()));
-        Message auxMessage = threadChannel.sendMessage(content)
+        MessageCreateAction auxAction = threadChannel.sendMessage(content)
             .addContent(contentExtra)
             .addComponents(ActionRow.of(
                 Button.primary("edit-tags:"+entryMeta.entry.getId(), "Edit tags"),
@@ -2707,8 +2707,17 @@ public class ScarletDiscordJDA implements ScarletDiscord
 //                Button.secondary("vrchat-user-edit-manager-notes:"+entryMeta.entry.getTargetId(), "Edit manager notes"),
                 Button.primary("event-redact:"+entryMeta.entry.getId(), "Redact event"),
                 Button.secondary("event-unredact:"+entryMeta.entry.getId(), "Unredact event")
-            ))
-            .completeAfter(1500L, TimeUnit.MILLISECONDS);
+            ));
+        // Optional timed-ban row, gated by Settings → Moderation → "show timed-ban buttons".
+        if (Boolean.TRUE.equals(scarlet.timedBansEnabled.get()))
+            auxAction = auxAction.addComponents(ActionRow.of(
+                Button.secondary("timed-ban:6:"+entryMeta.entry.getTargetId(), "Timed ban 6h"),
+                Button.secondary("timed-ban:24:"+entryMeta.entry.getTargetId(), "Timed ban 24h"),
+                Button.secondary("timed-ban:72:"+entryMeta.entry.getTargetId(), "Timed ban 3d"),
+                Button.secondary("timed-ban:168:"+entryMeta.entry.getTargetId(), "Timed ban 7d"),
+                Button.secondary("timed-ban-custom:"+entryMeta.entry.getTargetId(), "Timed ban…")
+            ));
+        Message auxMessage = auxAction.completeAfter(1500L, TimeUnit.MILLISECONDS);
         
         entryMeta.auxMessageSnowflake = auxMessage.getId();
         scarlet.data.auditEntryMetadata(entryMeta.entry.getId(), entryMeta);

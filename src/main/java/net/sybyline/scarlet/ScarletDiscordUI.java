@@ -351,6 +351,173 @@ public class ScarletDiscordUI
         return true;
     }
 
+    // ── Timed bans ───────────────────────────────────────────────────────────────
+    // Ban a user now and schedule an automatic unban after a fixed window. The expiry sweep
+    // (Scarlet.processTimedBans) performs the unban later, attributed to the original actor.
+    // Requires the same group ban-management permission as a normal ban.
+    @ButtonClk("timed-ban")
+    public void timedBan(ButtonInteractionEvent event, InteractionHook hook)
+    {
+        String[] parts = event.getButton().getCustomId().split(":");
+        long hours;
+        try
+        {
+            hours = Long.parseLong(parts[1]);
+        }
+        catch (NumberFormatException ex)
+        {
+            hook.sendMessage("Invalid timed-ban duration").setEphemeral(true).queue();
+            return;
+        }
+        this._timedBan(hook, event.getMember(), parts[2], hours * 3600_000L);
+    }
+
+    @ButtonClk("timed-ban-custom")
+    public void timedBanCustom(ButtonInteractionEvent event)
+    {
+        if (!Boolean.TRUE.equals(this.discord.scarlet.timedBansEnabled.get()))
+        {
+            event.reply("Timed bans are disabled in Scarlet's settings.").setEphemeral(true).queue();
+            return;
+        }
+        String targetUserId = event.getButton().getCustomId().split(":")[1];
+        Modal.Builder m = Modal.create("timed-ban-custom:"+targetUserId, "Timed ban")
+            .addComponents(Label.of("Duration (e.g. 30m, 6h, 3d, 2w, or a number of hours)", TextInput
+                    .create("input-duration:"+targetUserId, TextInputStyle.SHORT)
+                    .setRequired(true)
+                    .setPlaceholder("7d").build()));
+        event.replyModal(m.build()).queue();
+    }
+
+    @ModalSub("timed-ban-custom")
+    public void timedBanCustom(ModalInteractionEvent event)
+    {
+        String targetUserId = event.getModalId().split(":")[1];
+        long durationMillis = parseDurationMillis(event.getValue("input-duration:"+targetUserId).getAsString());
+        if (durationMillis <= 0L)
+        {
+            event.reply("Couldn't read that duration. Try e.g. 30m, 6h, 3d, 2w, or a plain number of hours.").setEphemeral(true).queue();
+            return;
+        }
+        event.deferReply(true).queue();
+        this._timedBan(event.getHook(), event.getMember(), targetUserId, durationMillis);
+    }
+
+    boolean _timedBan(InteractionHook hook, Member member, String vrcTargetId, long durationMillis)
+    {
+        if (!Boolean.TRUE.equals(this.discord.scarlet.timedBansEnabled.get()))
+        {
+            hook.sendMessage("Timed bans are disabled in Scarlet's settings.").setEphemeral(true).queue();
+            return false;
+        }
+        String vrcActorId = this.discord.scarlet.data.globalMetadata_getSnowflakeId(member.getId());
+        if (vrcActorId == null)
+        {
+            hook.sendMessage(this.discord.linkedIdsReply(member)).setEphemeral(true).queue();
+            return false;
+        }
+
+        long within1day = System.currentTimeMillis() - 86400_000L;
+        User sc = this.discord.scarlet.vrc.getUser(vrcTargetId, within1day);
+        if (sc == null)
+        {
+            hook.sendMessageFormat("No VRChat user found with id %s", vrcTargetId).setEphemeral(true).queue();
+            return false;
+        }
+
+        if (!this.discord.checkMemberHasVRChatPermission(GroupPermissions.group_bans_manage, member))
+        {
+            if (!this.discord.checkMemberHasScarletPermission(ScarletPermission.GROUPEX_BANS_MANAGE, member, false))
+            {
+                hook.sendMessage("You do not have permission to ban users.\n||(Your admin can enable this by giving your associated VRChat user ban management permissions in the group or with the command `/scarlet-discord-permissions type:Other name:groupex-bans-manage value:Allow`)||").setEphemeral(true).queue();
+                return false;
+            }
+        }
+        if (!this.discord.checkSelfRespondVrcPerms(GroupPermissions.group_bans_manage, hook))
+            return false;
+
+        long expiresAt = System.currentTimeMillis() + durationMillis;
+        long unbanEpochSec = expiresAt / 1000L;
+        String human = formatDuration(durationMillis);
+
+        GroupMemberStatus status = this.discord.scarlet.vrc.getGroupMembershipStatus(this.discord.scarlet.vrc.groupId, vrcTargetId);
+
+        // Already banned → just attach/refresh a timer, converting a standing ban into a timed one.
+        if (status == GroupMemberStatus.BANNED)
+        {
+            this.discord.scarlet.pendingModActions.setTimedBan(vrcTargetId, expiresAt, vrcActorId);
+            hook.sendMessageFormat("%s is already banned — scheduled automatic unban in %s (<t:%d:R>)", sc.getDisplayName(), human, Long.valueOf(unbanEpochSec)).setEphemeral(false).queue();
+            return true;
+        }
+
+        // Otherwise ban now, then schedule the unban.
+        if (this.discord.scarlet.pendingModActions.addPending(GroupAuditType.USER_BAN, vrcTargetId, vrcActorId) != null)
+        {
+            hook.sendMessage("This VRChat user currently has automated/assisted moderation pending, please retry later").setEphemeral(true).queue();
+            return false;
+        }
+        if (!this.discord.scarlet.vrc.banFromGroup(vrcTargetId))
+        {
+            this.discord.scarlet.pendingModActions.pollPending(GroupAuditType.USER_BAN, vrcTargetId);
+            hook.sendMessageFormat("Failed to ban %s", sc.getDisplayName()).setEphemeral(true).queue();
+            return false;
+        }
+        this.discord.scarlet.pendingModActions.setTimedBan(vrcTargetId, expiresAt, vrcActorId);
+        hook.sendMessageFormat("Banned %s for %s — automatic unban <t:%d:R>", sc.getDisplayName(), human, Long.valueOf(unbanEpochSec)).setEphemeral(false).queue();
+        return true;
+    }
+
+    /** Parse a duration like "30m", "6h", "3d", "2w", or a bare number (interpreted as hours). Returns millis, or -1 if unparseable. */
+    static long parseDurationMillis(String s)
+    {
+        if (s == null)
+            return -1L;
+        s = s.trim().toLowerCase(java.util.Locale.ROOT);
+        if (s.isEmpty())
+            return -1L;
+        Matcher mm = Pattern.compile("^(\\d+(?:\\.\\d+)?)\\s*([smhdw]?)$").matcher(s);
+        if (!mm.matches())
+            return -1L;
+        double value;
+        try
+        {
+            value = Double.parseDouble(mm.group(1));
+        }
+        catch (NumberFormatException ex)
+        {
+            return -1L;
+        }
+        long unitMillis;
+        switch (mm.group(2))
+        {
+        case "s": unitMillis = 1000L; break;
+        case "m": unitMillis = 60_000L; break;
+        case "d": unitMillis = 86_400_000L; break;
+        case "w": unitMillis = 604_800_000L; break;
+        case "h": default: unitMillis = 3_600_000L; break; // bare number = hours
+        }
+        long millis = (long) (value * unitMillis);
+        return millis > 0L ? millis : -1L;
+    }
+
+    static String formatDuration(long millis)
+    {
+        long totalMinutes = millis / 60_000L;
+        long days = totalMinutes / 1440L;
+        long hours = (totalMinutes % 1440L) / 60L;
+        long minutes = totalMinutes % 60L;
+        StringBuilder sb = new StringBuilder();
+        if (days > 0L)
+            sb.append(days).append('d');
+        if (hours > 0L)
+            sb.append(hours).append('h');
+        if (minutes > 0L && days == 0L)
+            sb.append(minutes).append('m');
+        if (sb.length() == 0)
+            sb.append(totalMinutes).append('m');
+        return sb.toString();
+    }
+
     // ── Group join-request actions (Accept / Reject / Block) ─────────────────────
     // Buttons on the "Created Request" moderation post let a moderator respond to a request
     // to join a request-gated (private) group without leaving Discord. All require the VRChat

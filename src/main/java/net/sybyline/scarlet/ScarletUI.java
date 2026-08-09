@@ -2594,6 +2594,8 @@ public class ScarletUI implements IScarletUI
                 e.setCreatedAt(java.time.OffsetDateTime.now());
                 e.setDescription("[DEBUG] " + type.title);
                 this.scarlet.discord.process(this.scarlet, e);
+                // Also exercise the evidence-capture hook (normally driven by the audit loop).
+                this.scarlet.captureEvidenceIfKickBan(type.id);
                 this.appendDebugConsole(console, "fired " + type.name() + " (" + type.id + ")");
             }
             catch (Throwable ex)
@@ -3938,7 +3940,7 @@ public class ScarletUI implements IScarletUI
           "vrchat_client_launch_on_instance_create" },
 
         { "Moderation",
-          "audit_polling_interval",
+          "audit_polling_interval", "timed_bans_enabled",
           "heuristicKickCount", "heuristicPeriodDays", "outstandingPeriodDays" },
 
         { "Advisories",
@@ -3988,7 +3990,8 @@ public class ScarletUI implements IScarletUI
           "discord_ping_outstanding_user_ban", "discord_ping_outstanding_user_unban" },
 
         { "Evidence",
-          "evidence_enabled", "Evidence root folder", "evidence_file_path_format" },
+          "evidence_enabled", "Evidence root folder", "evidence_file_path_format",
+          "evidence_capture_enabled", "evidence_capture_hotkey" },
 
         { "VRChat Reports",
           "vrchat_report_email", "vrchat_report_template_footer" },

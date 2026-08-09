@@ -23,6 +23,7 @@ public class ScarletPendingModActions
         this.pendingModActionsFile = pendingModActionsFile;
         this.pendingModActions = new ConcurrentHashMap<>();
         this.pendingBanInfo = new ConcurrentHashMap<>();
+        this.timedBans = new ConcurrentHashMap<>();
         this.load();
     }
 
@@ -30,11 +31,30 @@ public class ScarletPendingModActions
     final File pendingModActionsFile;
     final Map<String, String> pendingModActions;
     final Map<String, BanInfo> pendingBanInfo;
+    // Users banned with an automatic expiry. Keyed by VRChat user id. Persisted so a
+    // pending unban survives restarts (a 7-day ban must outlive the app being closed).
+    final Map<String, TimedBan> timedBans;
 
     public static class DataSpec
     {
         public Map<String, String> pendingModActions;
         public Map<String, BanInfo> pendingBanInfo;
+        public Map<String, TimedBan> timedBans;
+    }
+    public static class TimedBan
+    {
+        public TimedBan()
+        {
+        }
+        public TimedBan(long expiresAt, String actorUserId)
+        {
+            this.expiresAt = expiresAt;
+            this.actorUserId = actorUserId;
+        }
+        /** Epoch milliseconds at which the automatic unban becomes due. */
+        public long expiresAt;
+        /** VRChat user id of the moderator who set the ban, so the unban is attributed to them. */
+        public String actorUserId;
     }
     public static class BanInfo
     {
@@ -136,6 +156,34 @@ public class ScarletPendingModActions
         return info;
     }
 
+    /** Record (or refresh) an automatic-unban timer for a banned user. */
+    public void setTimedBan(String targetUserId, long expiresAt, String actorUserId)
+    {
+        this.timedBans.put(targetUserId, new TimedBan(expiresAt, actorUserId));
+        this.save();
+    }
+
+    public TimedBan getTimedBan(String targetUserId)
+    {
+        return this.timedBans.get(targetUserId);
+    }
+
+    public boolean removeTimedBan(String targetUserId)
+    {
+        if (this.timedBans.remove(targetUserId) != null)
+        {
+            this.save();
+            return true;
+        }
+        return false;
+    }
+
+    /** A stable copy for iteration by the expiry sweep. */
+    public Map<String, TimedBan> timedBansSnapshot()
+    {
+        return new HashMap<>(this.timedBans);
+    }
+
     public boolean load()
     {
         if (!this.pendingModActionsFile.isFile())
@@ -163,6 +211,11 @@ public class ScarletPendingModActions
         {
             this.pendingBanInfo.putAll(spec.pendingBanInfo);
         }
+        this.timedBans.clear();
+        if (spec != null && spec.timedBans != null && !spec.timedBans.isEmpty())
+        {
+            this.timedBans.putAll(spec.timedBans);
+        }
         return true;
     }
 
@@ -171,6 +224,7 @@ public class ScarletPendingModActions
         DataSpec spec = new DataSpec();
         spec.pendingModActions = new HashMap<>(this.pendingModActions);
         spec.pendingBanInfo = new HashMap<>(this.pendingBanInfo);
+        spec.timedBans = new HashMap<>(this.timedBans);
         try (Writer w = MiscUtils.writer(this.pendingModActionsFile))
         {
             Scarlet.GSON_PRETTY.toJson(spec, DataSpec.class, w);

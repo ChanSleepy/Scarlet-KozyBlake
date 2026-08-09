@@ -79,7 +79,7 @@ public final class VrchatApiVersionChecker
     {
         String bundledVersion = detectBundledVersion();
         if (MiscUtils.blank(bundledVersion))
-            bundledVersion = "1.20.8-nightly.15";
+            bundledVersion = "1.20.9-nightly.5";
         String latestVersion = bundledVersion + ".test";
         return new Report(Level.WARNING, bundledVersion, latestVersion, true,
             "Scarlet bundles VRChat API " + bundledVersion + ", but upstream now has " + latestVersion + ".",

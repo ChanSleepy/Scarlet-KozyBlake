@@ -397,7 +397,25 @@ public class ScarletSettings
 
     private EncryptedPrefs createSecurePrefs(Preferences prefs, String namespace)
     {
-        return new EncryptedPrefs(prefs, globalPW);
+        // Pass the data directory so EncryptedPrefs keeps a redundant, self-healing copy of every
+        // secret in a file there (dual-write + verified read fallback + reconstruction), instead of
+        // trusting the Windows-registry-backed Preferences store alone.
+        return new EncryptedPrefs(prefs, globalPW, Scarlet.dir);
+    }
+
+    /**
+     * Reconcile the registry and the data-folder secure-store file without destroying anything, and
+     * return a plain report. When {@code cutover} is true and the file already byte-matches every
+     * registry entry, the registry is snapshotted and then emptied so the file becomes the primary
+     * store. Safe to call at any time.
+     */
+    public String repairSecureStore(boolean cutover)
+    {
+        this.awaitPrefs("repairing secure store");
+        EncryptedPrefs enc = this.globalEncrypted != null ? this.globalEncrypted : this.encrypted;
+        if (enc == null)
+            return "Secure store is not initialized yet.";
+        return enc.repair(cutover);
     }
 
     private static void flushPreferences(Preferences prefs, String reason)

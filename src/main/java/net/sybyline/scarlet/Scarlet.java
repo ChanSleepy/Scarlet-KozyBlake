@@ -990,6 +990,91 @@ public class Scarlet implements Closeable
     final ScarletSettings.FileValued<Void> advisoryTranslateNow = this.settings.new FileValuedVoid("advisory_translate_now", I18n.tr("setting.advisory_translate_now.btn"), this::uiTranslateAdvisories);
     final ScarletSettings.FileValued<Void> advisoryRestore = this.settings.new FileValuedVoid("advisory_restore", I18n.tr("setting.advisory_restore.btn"), this::uiRestoreAdvisories);
 
+    // Automatic evidence capture: on a kick/ban audit event, synthesize a global hotkey press so an
+    // external capture tool (OBS "Save Replay Buffer", Medal, …) clips the moment. Off by default;
+    // bind the same hotkey here that you set in the capture tool.
+    final ScarletSettings.FileValued<Boolean> timedBansEnabled = this.settings.new FileValuedBoolean("timed_bans_enabled", I18n.tr("setting.timed_bans_enabled"), true);
+    final ScarletSettings.FileValued<Boolean> evidenceCaptureEnabled = this.settings.new FileValuedBoolean("evidence_capture_enabled", I18n.tr("setting.evidence_capture_enabled"), false);
+    final ScarletSettings.FileValued<String> evidenceCaptureHotkey = this.settings.new FileValuedStringPattern("evidence_capture_hotkey", I18n.tr("setting.evidence_capture_hotkey"), "F9", null, true);
+
+    // Fires the capture hotkey for kick/ban moderation events when enabled. Called from the audit
+    // processing loop; runs off-thread so a slow key injection never stalls audit handling.
+    /**
+     * Expiry sweep for timed group bans. Runs periodically: for every ban whose window has
+     * elapsed, confirm the user is still banned and then lift the ban, attributing the unban to
+     * the moderator who set it. Non-destructive on failure — a null/unknown membership status or a
+     * failed unban leaves the record in place to retry on the next tick, so a transient VRChat API
+     * hiccup can never silently strand a user as banned or drop the timer.
+     */
+    void processTimedBans()
+    {
+        ScarletPendingModActions pma = this.pendingModActions;
+        ScarletVRChat vrc = this.vrc;
+        if (pma == null || vrc == null)
+            return;
+        String groupId = vrc.groupId;
+        if (groupId == null || groupId.isEmpty())
+            return;
+        long now = System.currentTimeMillis();
+        for (java.util.Map.Entry<String, ScarletPendingModActions.TimedBan> e : pma.timedBansSnapshot().entrySet())
+        {
+            String userId = e.getKey();
+            ScarletPendingModActions.TimedBan tb = e.getValue();
+            if (tb == null || tb.expiresAt > now)
+                continue; // still within the ban window
+
+            io.github.vrchatapi.model.GroupMemberStatus status;
+            try
+            {
+                status = vrc.getGroupMembershipStatus(groupId, userId);
+            }
+            catch (Exception ex)
+            {
+                LOG.warn("Timed-ban sweep: membership lookup failed for {}; will retry next tick", userId, ex);
+                continue;
+            }
+            if (status == null)
+                continue; // transient/unknown — do NOT drop the record; retry next tick
+            if (status != io.github.vrchatapi.model.GroupMemberStatus.BANNED)
+            {
+                // The ban was already lifted (e.g. manually); the timer is moot.
+                pma.removeTimedBan(userId);
+                continue;
+            }
+
+            String actorId = tb.actorUserId;
+            if (pma.addPending(GroupAuditType.USER_UNBAN, userId, actorId) != null)
+                continue; // another assisted/automated action is already pending; retry next tick
+            if (vrc.unbanFromGroup(userId))
+            {
+                pma.removeTimedBan(userId);
+                LOG.info("Timed ban expired: unbanned {} (attributed to actor {})", userId, actorId);
+            }
+            else
+            {
+                pma.pollPending(GroupAuditType.USER_UNBAN, userId);
+                LOG.warn("Timed ban for {} expired but the unban call failed; will retry next tick", userId);
+            }
+        }
+    }
+
+    void captureEvidenceIfKickBan(String eventType)
+    {
+        if (!Boolean.TRUE.equals(this.evidenceCaptureEnabled.get()))
+            return;
+        switch (eventType == null ? "" : eventType)
+        {
+        case "group.instance.kick":  // INSTANCE_KICK
+        case "group.member.remove":  // MEMBER_REMOVE (removed from group)
+        case "group.user.ban":       // USER_BAN
+        {
+            String hotkey = this.evidenceCaptureHotkey.get();
+            this.exec.execute(() -> net.sybyline.scarlet.util.EvidenceCapture.fireHotkey(hotkey, 250));
+        } break;
+        default: break;
+        }
+    }
+
     // Translates every watched group's advisory into the current UI language via the configured
     // endpoint, off the EDT (it makes network calls), then reports how many changed. Group names,
     // ids and tags are untouched. If no endpoint is set, explains how to enable it.
@@ -1360,6 +1445,8 @@ public class Scarlet implements Closeable
         // pool; each tick is cheap and failures in the watchdog itself are swallowed.
         this.healthWatchdogStartedMillis = System.currentTimeMillis();
         this.exec.scheduleWithFixedDelay(this::healthWatchdogTick, 90L, 60L, TimeUnit.SECONDS);
+        // Lift expired timed group bans (see processTimedBans). Cheap and failure-tolerant.
+        this.exec.scheduleWithFixedDelay(this::processTimedBans, 60L, 60L, TimeUnit.SECONDS);
         try
         {
             long filecheck = 3;
@@ -1781,7 +1868,7 @@ Send-ScarletIPC -GroupID 'grp_00000000-0000-0000-0000-000000000000' -Message 'st
     private static final java.util.Set<String> CLI_CANONICAL = new java.util.HashSet<>(java.util.Arrays.asList(
         "info", "help", "logout", "exit", "halt", "quit", "stop", "reboot", "restart", "langlint",
         "simulate", "explore", "tts", "link", "importgroups", "importgroupsjson",
-        "translate-advisories", "restore-advisories",
+        "translate-advisories", "restore-advisories", "repair-secure-store",
         "vrchatapi-test", "popup", "popups", "popup-test"));
 
     // Canonical command → i18n key whose value is a comma/space-separated list of that command's
@@ -1852,6 +1939,8 @@ Send-ScarletIPC -GroupID 'grp_00000000-0000-0000-0000-000000000000' -Message 'st
                 sb.append("\n  reboot             - fully restart KozyBlake/Scarlet (alternate: restart)");
                 sb.append("\n  translate-advisories        — translate watched-group advisories to your UI language");
                 sb.append("\n  restore-advisories          — restore original (untranslated) advisories");
+                sb.append("\n  repair-secure-store         — reconcile the registry + data-folder secure store (report only)");
+                sb.append("\n  repair-secure-store cutover — after a clean report, snapshot & empty the registry (file becomes primary)");
                 // If the active UI language defines command aliases, list them so a native
                 // speaker can discover the words they can type instead of the English ones.
                 StringBuilder localized = new StringBuilder();
@@ -1937,6 +2026,18 @@ Send-ScarletIPC -GroupID 'grp_00000000-0000-0000-0000-000000000000' -Message 'st
                 String msg = I18n.tr("advisory.restoreDone", Integer.valueOf(n));
                 LOG.info(msg);
                 if (out != null) out.accept(msg);
+            } break;
+            case "repair-secure-store": {
+                boolean cutover = false;
+                while (ls.hasNext())
+                {
+                    String arg = ls.next();
+                    if ("cutover".equalsIgnoreCase(arg) || "migrate".equalsIgnoreCase(arg) || "commit".equalsIgnoreCase(arg))
+                        cutover = true;
+                }
+                String report = this.settings.repairSecureStore(cutover);
+                LOG.info("secure store repair (cutover={}):\n{}", Boolean.valueOf(cutover), report);
+                if (out != null) out.accept(report);
             } break;
             case "simulate": {
                 if (this.trainingMode == null || !this.trainingMode.get())
@@ -3083,6 +3184,8 @@ Send-ScarletIPC -GroupID 'grp_00000000-0000-0000-0000-000000000000' -Message 'st
                 // just ended.)
                 this.pollAuditSoon();
             }
+            // Automatic evidence capture: trigger an external clip on kick/ban events.
+            this.captureEvidenceIfKickBan(entry.getEventType());
         }
         catch (Exception ex)
         {

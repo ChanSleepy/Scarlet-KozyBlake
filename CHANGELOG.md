@@ -1,6 +1,23 @@
 
 # Changelog
 
+## 0.4.18-b3
+
+A VRChat API update forced an early release; alongside it this build adds timed group bans and automatic evidence capture, and fixes a recurring secure-store corruption.
+
+### Added
+
+- **Timed group bans — ban now, auto-unban later.** Based on a community contribution (reworked to fit the current codebase). Each moderation post's action buttons now include a **Timed ban** row: **6h / 24h / 3d / 7d** one-click options plus **Timed ban…**, which opens a modal accepting a flexible duration (`30m`, `6h`, `3d`, `2w`, or a plain number of hours). Clicking one bans the user immediately and records an expiry; if the user is *already* banned it simply attaches the timer, converting a standing ban into a timed one. A background sweep (every 60 s) lifts expired bans, **attributing the unban to the moderator who set it**. Timers are persisted in `pending_moderation_actions.json`, so a 7-day ban survives restarts. The sweep is deliberately fail-safe: if VRChat's membership lookup returns nothing or the unban call fails, the record is left in place to retry on the next tick — a transient API hiccup can never strand a user as banned or silently drop the timer — and if the ban was lifted manually in the meantime, the moot timer is cleaned up. All actions require the same group ban-management permission as a normal ban. The button row can be turned off at **Settings → Moderation → "show timed-ban buttons on moderation posts"** (on by default); with it off the row is hidden and any stale button gives an ephemeral "disabled" reply. The sweep still finishes any timers that were already set. *(The originally submitted code targeted 0.4.15 and, as written, would have overwritten the richer `ScarletPendingModActions`, never actually unbanned anyone (a placeholder where the unban call belonged), lost its timers on restart, treated a failed status lookup as "unbanned," and shipped without the button handlers or a scheduler; all of that was fixed in this integration.)*
+- **Automatic evidence capture — trigger OBS/Medal on a kick or ban (à la BanLogger).** New **Settings → Evidence** options: enable "trigger capture hotkey on kick/ban" and set the hotkey combo you bound in your capture tool (e.g. `CTRL+SHIFT+F9`, or just `F9`). When a `group.instance.kick`, `group.member.remove`, or `group.user.ban` audit event is detected, Scarlet synthesizes that key press for 250 ms via an OS-level `Robot`, so a tool listening for a *global* replay-buffer/clip hotkey captures the moment even when it isn't focused. Off by default; best-effort (it logs and moves on if the key can't be sent or the environment is headless), and never blocks moderation handling. Firing a ban/kick from the debug Event console exercises it too.
+
+### Fixed
+
+- **Recurring secure-store corruption (`AEADBadTagException: Tag mismatch`).** On Windows, credentials lived only in the registry-backed Java Preferences store, which periodically corrupts (antivirus locking `NTUSER.DAT`, roaming/synced profiles, OneDrive-redirected AppData, unclean shutdowns) — and a single failed read of the internal key record used to silently reseed and orphan *every* stored secret at once. Scarlet now keeps a redundant encrypted copy of each secret in a file in the data folder: every write goes to both stores, and a read falls back to the file only when the registry copy is missing or fails its AES-GCM integrity check, then reconstructs the bad copy from the verified-good one. It never destroys data it can't verify — the silent reseed is gone, a full snapshot is written before any forced reseed, and unreadable bytes are quarantined to a timestamped file rather than overwritten. Two CLI commands are included: `repair-secure-store` reconciles the two stores and prints a report, and `repair-secure-store cutover` (after a clean report) snapshots the registry and then empties it so the data-folder file becomes the primary store. Registry-only installs and the security regression tests are unchanged.
+
+### Changed
+
+- **Updated `vrchatapi-java` to `1.20.9-nightly.5`** (from `1.20.8-nightly.15`). VRChat shipped an API change that the previous build no longer tracks cleanly, so this release exists to pick it up. It otherwise carries the same changes as 0.4.18-b2 (below).
+
 ## 0.4.18-b2
 
 Full localization (with Russian), moderator training mode, and reliability watchdogs.
