@@ -4,12 +4,22 @@ Cut ahead of schedule to track a VRChat API update, this release also brings **t
 
 ## Highlights
 
+- **Consolidated moderation log** — one `/moderation-log` command collapses a user's whole moderation history into a single post with counts.
 - **Timed group bans** — ban now, auto-unban later (6h / 24h / 3d / 7d, or a custom duration), straight from the moderation post.
 - **Automatic evidence capture** — fire your OBS/Medal replay-buffer hotkey the moment a kick or ban happens, à la BanLogger.
 - **Fixed the secure-store corruption** that periodically wiped saved credentials on Windows (`AEADBadTagException: Tag mismatch`).
 - **VRChat API bump** to `1.20.9-nightly.5` — the reason this release exists.
 
 ## What's new
+
+### Consolidated moderation log
+
+When one user has racked up a wall of separate moderation posts, `/moderation-log user:<vrchat user>` pulls them together into a single **thread**.
+
+- The thread opens with a summary header tallying the totals — **warns, mutes, instance kicks, group removals, bans, unbans** — followed by every action newest-first, each linking straight back to its original Discord post. (Run somewhere a thread can't be created, it falls back to an inline reply.)
+- If the user is currently under a timed ban, the log notes the automatic-unban time.
+- How far back it reaches is up to you: **Settings → Moderation → "Moderation log: include history from the past N days"** (0 = all recorded history).
+- It reads Scarlet's own per-user audit index, not Discord's message history, so it isn't limited by how far back a bot can read — it goes back as far as Scarlet has logged. Redacted and already-bundled entries are skipped.
 
 ### Timed group bans
 

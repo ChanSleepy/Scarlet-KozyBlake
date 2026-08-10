@@ -2026,6 +2026,144 @@ public class ScarletDiscordCommands
         this.discord.interactions.new Pagination(event.getId(), sb).queue(hook);
     }
 
+    @SlashCmd("moderation-log")
+    @Desc("Consolidate a VRChat user's moderation history (counts + links) into one post")
+    @DefaultPerms(Permission.USE_APPLICATION_COMMANDS)
+    public void moderationLog(SlashCommandInteractionEvent event, InteractionHook hook, @SlashOpt("vrchat-user") io.github.vrchatapi.model.User vrchatUser) throws Exception
+    {
+        String vrcId = VrcIds.getAsString_user(event.getOption("vrchat-user"));
+        if (vrchatUser == null)
+        {
+            hook.sendMessageFormat("No VRChat user found with id %s", vrcId).setEphemeral(true).queue();
+            return;
+        }
+
+        ScarletData.UserMetadata userMeta = this.discord.scarlet.data.userMetadata(vrcId);
+        String[] auditEntryIds = userMeta == null ? null : userMeta.auditEntryIds;
+        if (auditEntryIds == null || auditEntryIds.length == 0)
+        {
+            hook.sendMessageFormat("No moderation history recorded for [%s](%s%s)", vrchatUser.getDisplayName(), VrcWeb.Home.user, vrcId).setEphemeral(true).queue();
+            return;
+        }
+
+        int lookbackDays = this.discord.scarlet.moderationLogLookbackDays.get();
+        java.time.OffsetDateTime cutoff = lookbackDays > 0 ? java.time.OffsetDateTime.now().minusDays(lookbackDays) : null;
+
+        java.util.List<ScarletData.AuditEntryMetadata> metas = new java.util.ArrayList<>();
+        for (String auditEntryId : auditEntryIds)
+        {
+            if (auditEntryId == null)
+                continue;
+            ScarletData.AuditEntryMetadata m = this.discord.scarlet.data.auditEntryMetadata(auditEntryId);
+            if (m == null || m.entry == null || m.entryRedacted || m.hasParentEvent())
+                continue;
+            if (cutoff != null && m.entry.getCreatedAt().isBefore(cutoff))
+                continue;
+            metas.add(m);
+        }
+        if (metas.isEmpty())
+        {
+            hook.sendMessageFormat("No moderation history for [%s](%s%s) within the configured window (%d day(s)).", vrchatUser.getDisplayName(), VrcWeb.Home.user, vrcId, Integer.valueOf(lookbackDays)).setEphemeral(true).queue();
+            return;
+        }
+        metas.sort((a, b) -> b.entry.getCreatedAt().compareTo(a.entry.getCreatedAt())); // newest first
+
+        int warns = 0, mutes = 0, ikicks = 0, gremoves = 0, bans = 0, unbans = 0, other = 0;
+        for (ScarletData.AuditEntryMetadata m : metas)
+        {
+            switch (m.entry.getEventType() == null ? "" : m.entry.getEventType())
+            {
+            case "group.instance.warn":  warns++;    break;
+            case "group.instance.mute":  mutes++;    break;
+            case "group.instance.kick":  ikicks++;   break;
+            case "group.member.remove":  gremoves++; break;
+            case "group.user.ban":       bans++;     break;
+            case "group.user.unban":     unbans++;   break;
+            default:                     other++;    break;
+            }
+        }
+
+        // Summary line (counts + any active timed ban)
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        if (warns > 0)    parts.add(warns    + " warn"          + (warns == 1 ? "" : "s"));
+        if (mutes > 0)    parts.add(mutes    + " mute"          + (mutes == 1 ? "" : "s"));
+        if (ikicks > 0)   parts.add(ikicks   + " instance kick" + (ikicks == 1 ? "" : "s"));
+        if (gremoves > 0) parts.add(gremoves + " group removal" + (gremoves == 1 ? "" : "s"));
+        if (bans > 0)     parts.add(bans     + " ban"           + (bans == 1 ? "" : "s"));
+        if (unbans > 0)   parts.add(unbans   + " unban"         + (unbans == 1 ? "" : "s"));
+        if (other > 0)    parts.add(other    + " other");
+        StringBuilder summary = new StringBuilder();
+        summary.append("**").append(metas.size()).append("** action(s): ").append(parts.isEmpty() ? "none" : String.join(", ", parts));
+        summary.append(lookbackDays > 0 ? " _(past " + lookbackDays + " day(s))_" : " _(all recorded history)_");
+        ScarletPendingModActions.TimedBan timedBan = this.discord.scarlet.pendingModActions.getTimedBan(vrcId);
+        if (timedBan != null)
+            summary.append("\n:hourglass: Active timed ban — automatic unban <t:").append(Long.toUnsignedString(timedBan.expiresAt / 1000L)).append(":R>");
+
+        // One line per action, newest first (masked links render inside embeds)
+        int maxListed = 150;
+        java.util.List<String> actionLines = new java.util.ArrayList<>();
+        for (int i = 0; i < metas.size() && i < maxListed; i++)
+        {
+            ScarletData.AuditEntryMetadata m = metas.get(i);
+            GroupAuditType type = GroupAuditType.of(m.entry.getEventType());
+            String title = type != null ? type.title : String.valueOf(m.entry.getEventType());
+            String actor = m.hasAuxActor() ? m.auxActorDisplayName : m.entry.getActorDisplayName();
+            String desc = m.hasDescription() ? m.entryDescription : m.entry.getDescription();
+            String url = m.getSomeUrl();
+            StringBuilder line = new StringBuilder();
+            line.append("<t:").append(Long.toUnsignedString(m.entry.getCreatedAt().toEpochSecond())).append(":f> **").append(title).append("**");
+            if (actor != null && !actor.isEmpty())
+                line.append(" by ").append(actor);
+            if (desc != null && !desc.trim().isEmpty())
+                line.append(url != null ? ": [" + desc.trim() + "](" + url + ")" : ": " + desc.trim());
+            else if (url != null)
+                line.append(" ([post](").append(url).append("))");
+            actionLines.add(line.toString());
+        }
+        if (metas.size() > maxListed)
+            actionLines.add("_… and " + (metas.size() - maxListed) + " older action(s) not listed._");
+
+        String label = MiscUtils.maybeEllipsis(200, "Moderation log — " + vrchatUser.getDisplayName());
+        MessageEmbed summaryEmbed = new EmbedBuilder()
+            .setTitle(MiscUtils.maybeEllipsis(256, "Moderation log — " + vrchatUser.getDisplayName()), VrcWeb.Home.user(vrcId))
+            .setDescription(summary.toString())
+            .build();
+
+        // Consolidate into a single thread: create it, drop the summary in, then the actions (chunked to fit embeds).
+        try
+        {
+            net.dv8tion.jda.api.entities.channel.concrete.TextChannel textChannel = event.getChannel().asTextChannel();
+            net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel thread = textChannel
+                .createThreadChannel(MiscUtils.maybeEllipsis(100, "Moderation log — " + vrchatUser.getDisplayName()))
+                .setAutoArchiveDuration(net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel.AutoArchiveDuration.TIME_1_WEEK)
+                .complete();
+            thread.sendMessageEmbeds(summaryEmbed).complete();
+            StringBuilder chunk = new StringBuilder();
+            for (String line : actionLines)
+            {
+                if (chunk.length() > 0 && chunk.length() + line.length() + 1 > 4000)
+                {
+                    thread.sendMessageEmbeds(new EmbedBuilder().setDescription(chunk.toString()).build()).complete();
+                    chunk.setLength(0);
+                }
+                if (chunk.length() > 0)
+                    chunk.append('\n');
+                chunk.append(line);
+            }
+            if (chunk.length() > 0)
+                thread.sendMessageEmbeds(new EmbedBuilder().setDescription(chunk.toString()).build()).complete();
+            hook.sendMessageFormat("Created moderation log thread: %s", thread.getAsMention()).setEphemeral(true).queue();
+        }
+        catch (Exception threadFailed)
+        {
+            // Couldn't open a thread here (run inside a thread/forum, or missing permission) — reply inline instead.
+            StringBuilder sb = new StringBuilder("## ").append(label).append('\n').append(summary);
+            for (String line : actionLines)
+                sb.append('\n').append(line);
+            this.discord.interactions.new Pagination(event.getId(), sb).queue(hook);
+        }
+    }
+
     // vrchat-user-ban
 
     @SlashCmd("vrchat-user-ban")

@@ -1,11 +1,11 @@
 {
   "latest_release": "0.4.18",
-  "latest_build": "0.4.18-b2",
+  "latest_build": "0.4.18-b3",
   "announcement": {
-    "id": "20260723-000000-b2",
-    "severity": "info",
-    "title": "0.4.18-b2 released — localization, training mode, reliability",
-    "message": "0.4.18-b2 is out. The entire desktop client is now translated and ships complete English and Russian (with a native-name language dropdown and localized text-to-speech callouts); community translations still drop into the lang/ folder with no rebuild. New moderator Training mode (Settings -> Training) lets a trainer fire simulated events through the real pipeline — including a genuine Discord post to practice tagging — all marked [TRAINING] and isolated from live moderation, with an optional /set-training-channel to keep drills out of the real audit log. Reliability watchdogs now make Scarlet's silent failure modes loud and recoverable: it detects a stalled log tailer or an expired VRChat session, attempts unattended re-login, and can route health alerts to a staff channel via /set-ops-alert-channel. Data files also now save crash-safely with dated backups. See the changelog for the full list.",
-    "expires": "2026-08-23T00:00:00Z"
+    "id": "20260810-000000-b3",
+    "severity": "warning",
+    "title": "0.4.18-b3 — required update (VRChat API change)",
+    "message": "0.4.18-b3 is a required update. VRChat changed its API, and earlier builds no longer track it cleanly — updating keeps VRChat and moderation features working correctly. Aside from that change, this build matches 0.4.18-b2.\n\nSeparately: there has been interest in a locally-hosted web UI for administering Scarlet. Because that would involve credential storage and administrator access, I want it done properly rather than improvised or AI-generated — I'm looking for someone with genuine application-security experience to help design and build it. If that's you and you'd like to contribute, please reach out in the Discord.",
+    "expires": "2026-09-10T00:00:00Z"
   }
 }

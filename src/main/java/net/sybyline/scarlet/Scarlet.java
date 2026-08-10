@@ -931,6 +931,8 @@ public class Scarlet implements Closeable
     final ScarletSettings.FileValued<EnforcementListState> enforceInstancesWorlds = this.settings.new FileValuedEnum<>("enforce_instances_worlds", I18n.tr("setting.enforce_instances_worlds"), EnforcementListState.DISABLED);
     final ScarletSettings.FileValued<String[]> enforceInstancesWorldList = this.settings.new FileValuedStringArrayPattern("enforce_instances_world_list", I18n.tr("setting.enforce_instances_world_list"), new String[0], VrcIds.P_ID_WORLD, true);
     final ScarletSettings.FileValued<Integer> auditPollingInterval = this.settings.new FileValuedIntRange("audit_polling_interval", I18n.tr("setting.audit_polling_interval"), 60, 10, 300);
+    // How far back /moderation-log reaches when consolidating a user's history. 0 = all recorded history.
+    final ScarletSettings.FileValued<Integer> moderationLogLookbackDays = this.settings.new FileValuedIntRange("moderation_log_lookback_days", I18n.tr("setting.moderation_log_lookback_days"), 0, 0, 3650);
     /** How much to fade players who have left the instance, as a percent blended toward the background (0 = no dimming). */
     final ScarletSettings.FileValued<Integer> uiLeftPlayerDim = this.settings.new FileValuedIntRange("ui_left_player_dim_percent", I18n.tr("setting.ui_left_player_dim_percent"), 35, 0, 80);
     final ScarletSettings.FileValued<Void> addAltCreds = this.settings.new FileValuedVoid("Add alternate credentials", "Add", this.vrc::addAlternateCredentials),
@@ -2471,10 +2473,8 @@ Send-ScarletIPC -GroupID 'grp_00000000-0000-0000-0000-000000000000' -Message 'st
             StringBuilder text = new StringBuilder(report.message);
             if (report.updateAvailable)
             {
-                text.append("\n\nKozyBlake/Scarlet will continue starting, but if VRChat features behave oddly,");
-                text.append("\nyou may need a newer KozyBlake/Scarlet build with an updated API adapter.");
-                text.append("\n\nIf this is causing problems, please open a ticket in the KozyBlake/Scarlet Discord");
-                text.append("\nserver and ping BlakeBelladonna or Vinyarion.");
+                text.append("\n\nKozyBlake/Scarlet will continue starting, but if VRChat features behave oddly, you may need a newer KozyBlake/Scarlet build with an updated API adapter.");
+                text.append("\n\nIf this is causing problems, please open a ticket in the KozyBlake/Scarlet Discord server and ping BlakeBelladonna or Vinyarion.");
                 int choice = JOptionPane.showOptionDialog(
                     this.ui.getParentComponent(),
                     text.toString(),

@@ -3940,7 +3940,7 @@ public class ScarletUI implements IScarletUI
           "vrchat_client_launch_on_instance_create" },
 
         { "Moderation",
-          "audit_polling_interval", "timed_bans_enabled",
+          "audit_polling_interval", "timed_bans_enabled", "moderation_log_lookback_days",
           "heuristicKickCount", "heuristicPeriodDays", "outstandingPeriodDays" },
 
         { "Advisories",
